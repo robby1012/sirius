@@ -83,12 +83,38 @@ python gui/sirius_gui.py
 
 ## Screenshots
 
-The GUI includes:
-- Clean, modern interface using Qt Fusion style
-- Color-coded buttons (green for run, red for stop)
+### Main Application Window
+![Main Application Window](images/app.png)
+
+The main window includes:
 - Progress indication during test execution
 - Tabbed results view for easy navigation
 - Responsive layout that works with different window sizes
+
+### Summary Results
+![Summary Results](images/summary.png)
+
+View test results summary with key statistics including success rate, latency percentiles, and throughput metrics.
+
+### Summary Table View
+![Summary Table](images/table.png)
+
+Key metrics displayed in an easy-to-read table format.
+
+### Time Series Analysis
+![Time Series](images/time_series.png)
+
+Per-second performance data showing throughput and latency over time.
+
+### Performance Charts
+![Performance Charts](images/chart.png)
+
+Visual representation of throughput and latency metrics with matplotlib integration.
+
+### Request Logs
+![Request Logs](images/logs.png)
+
+Detailed per-request logs for in-depth analysis.
 
 ## Troubleshooting
 
