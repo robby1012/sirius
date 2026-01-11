@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QLineEdit, QPushButton, QTextEdit, QSpinBox, QComboBox,
     QGroupBox, QTabWidget, QTableWidget, QTableWidgetItem, QFileDialog,
-    QProgressBar, QMessageBox, QHeaderView, QStackedWidget
+    QProgressBar, QMessageBox, QHeaderView, QStackedWidget, QApplication
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont
@@ -25,6 +25,7 @@ from sirius import (
 
 from worker import TestWorker
 from widgets import MatplotlibWidget
+from auth_dialog import AuthDialog
 
 try:
     import matplotlib
@@ -42,6 +43,7 @@ class PerformanceTesterGUI(QMainWindow):
         self.summary = None
         self.timeseries = None
         self.worker = None
+        self.auth_config = {'type': 'None'}  # Store authentication configuration
         
         self.init_ui()
         
@@ -49,6 +51,19 @@ class PerformanceTesterGUI(QMainWindow):
         """Initialize the user interface"""
         self.setWindowTitle("Sirius - API Performance Tester")
         self.setMinimumSize(900, 700)
+        
+        # Get screen geometry and set window to use max height
+        screen = QApplication.primaryScreen().availableGeometry()
+        # Use 90% of screen width (or max 1400px) and 95% of screen height
+        width = min(int(screen.width() * 0.5), 1400)
+        height = int(screen.height())
+        self.resize(width, height)
+        
+        # Center the window on screen
+        self.move(
+            (screen.width() - width) // 2,
+            (screen.height() - height) // 2
+        )
         
         # Central widget and main layout
         central_widget = QWidget()
@@ -78,98 +93,33 @@ class PerformanceTesterGUI(QMainWindow):
         group = QGroupBox("Test Configuration")
         layout = QVBoxLayout()
         
-        # URL
-        url_layout = QHBoxLayout()
-        url_layout.addWidget(QLabel("URL:"))
+        # URL and Method in a single row
+        url_method_layout = QHBoxLayout()
+        url_method_layout.addWidget(QLabel("URL:"))
         self.url_input = QLineEdit()
         self.url_input.setPlaceholderText("https://api.example.com/endpoint")
-        url_layout.addWidget(self.url_input)
-        layout.addLayout(url_layout)
+        url_method_layout.addWidget(self.url_input, stretch=3)
         
-        # Method
-        method_layout = QHBoxLayout()
-        method_layout.addWidget(QLabel("Method:"))
         self.method_combo = QComboBox()
         self.method_combo.addItems(["GET", "POST", "PUT", "DELETE", "PATCH"])
         self.method_combo.setCurrentText("GET")
-        method_layout.addWidget(self.method_combo)
-        method_layout.addStretch()
-        layout.addLayout(method_layout)
+        self.method_combo.setMaximumWidth(100)
+        url_method_layout.addWidget(self.method_combo)
+        layout.addLayout(url_method_layout)
         
-        # Headers section with dynamic key-value table
-        headers_label = QLabel("Headers:")
-        layout.addWidget(headers_label)
+        # Tabs for Headers and Body
+        self.request_tabs = QTabWidget()
         
-        self.headers_table = QTableWidget()
-        self.headers_table.setColumnCount(3)
-        self.headers_table.setHorizontalHeaderLabels(["Key", "Value", ""])
-        self.headers_table.horizontalHeader().setStretchLastSection(False)
-        self.headers_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        self.headers_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        self.headers_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
-        self.headers_table.setColumnWidth(2, 30)
-        self.headers_table.setMaximumHeight(120)
-        # Add default header rows with predefined keys
-        self.add_header_row("Accept")
-        self.add_header_row("Authorization")
-        self.add_header_row("Content-Type")
-        self.add_header_row("User-Agent")
-        layout.addWidget(self.headers_table)
+        # Headers Tab
+        headers_tab = self.create_headers_tab()
+        self.request_tabs.addTab(headers_tab, "Headers")
         
-        # Add header button
-        add_header_btn = QPushButton("+ Add Header")
-        add_header_btn.clicked.connect(self.add_header_row)
-        layout.addWidget(add_header_btn)
+        # Body Tab
+        body_tab = self.create_body_tab()
+        self.request_tabs.addTab(body_tab, "Body")
         
-        # Body type selector
-        body_type_layout = QHBoxLayout()
-        body_type_layout.addWidget(QLabel("Body Type:"))
-        self.body_type_combo = QComboBox()
-        self.body_type_combo.addItems(["None", "JSON / Raw", "Form Data (multipart/form-data)"])
-        self.body_type_combo.currentIndexChanged.connect(self.on_body_type_changed)
-        body_type_layout.addWidget(self.body_type_combo)
-        body_type_layout.addStretch()
-        layout.addLayout(body_type_layout)
-        
-        # Body input stack (switches between text and form data)
-        self.body_stack = QStackedWidget()
-        
-        # Raw/JSON body widget
-        raw_body_widget = QWidget()
-        raw_body_layout = QVBoxLayout(raw_body_widget)
-        raw_body_layout.setContentsMargins(0, 0, 0, 0)
-        self.body_input = QTextEdit()
-        self.body_input.setPlaceholderText('{"key": "value"} or raw text')
-        self.body_input.setMaximumHeight(80)
-        raw_body_layout.addWidget(self.body_input)
-        self.body_stack.addWidget(raw_body_widget)
-        
-        # Form data widget
-        form_data_widget = QWidget()
-        form_data_layout = QVBoxLayout(form_data_widget)
-        form_data_layout.setContentsMargins(0, 0, 0, 0)
-        
-        self.formdata_table = QTableWidget()
-        self.formdata_table.setColumnCount(4)
-        self.formdata_table.setHorizontalHeaderLabels(["Key", "Value", "Type", ""])
-        self.formdata_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
-        self.formdata_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        self.formdata_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
-        self.formdata_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
-        self.formdata_table.setColumnWidth(0, 150)
-        self.formdata_table.setColumnWidth(2, 100)
-        self.formdata_table.setColumnWidth(3, 30)
-        self.formdata_table.setMaximumHeight(120)
-        form_data_layout.addWidget(self.formdata_table)
-        
-        add_formdata_btn = QPushButton("+ Add Field")
-        add_formdata_btn.clicked.connect(self.add_formdata_row)
-        form_data_layout.addWidget(add_formdata_btn)
-        
-        self.body_stack.addWidget(form_data_widget)
-        
-        layout.addWidget(self.body_stack)
-        self.body_stack.setVisible(False)  # Initially hidden
+        # Add with stretch to maximize height
+        layout.addWidget(self.request_tabs, stretch=1)
         
         # Number of requests and concurrency
         params_layout = QHBoxLayout()
@@ -200,6 +150,120 @@ class PerformanceTesterGUI(QMainWindow):
         
         group.setLayout(layout)
         return group
+    
+    def create_headers_tab(self) -> QWidget:
+        """Create the Headers tab"""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(5, 5, 5, 5)
+        
+        self.headers_table = QTableWidget()
+        self.headers_table.setColumnCount(3)
+        self.headers_table.setHorizontalHeaderLabels(["Key", "Value", ""])
+        self.headers_table.horizontalHeader().setStretchLastSection(False)
+        self.headers_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.headers_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.headers_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
+        self.headers_table.setColumnWidth(2, 30)
+        # Add default header rows with predefined keys
+        self.add_header_row("Accept")
+        self.add_header_row("Content-Type")
+        self.add_header_row("User-Agent")
+        # Add with stretch to maximize height
+        layout.addWidget(self.headers_table, stretch=1)
+        
+        # Add header button and Auth button
+        header_buttons_layout = QHBoxLayout()
+        add_header_btn = QPushButton("+ Add Header")
+        add_header_btn.clicked.connect(self.add_header_row)
+        header_buttons_layout.addWidget(add_header_btn)
+        
+        self.auth_btn = QPushButton("🔒 Authentication")
+        self.auth_btn.clicked.connect(self.open_auth_dialog)
+        self.auth_btn.setStyleSheet("QPushButton { background-color: #3498db; color: white; font-weight: bold; }")
+        header_buttons_layout.addWidget(self.auth_btn)
+        
+        header_buttons_layout.addStretch()
+        layout.addLayout(header_buttons_layout)
+        
+        return widget
+    
+    def create_body_tab(self) -> QWidget:
+        """Create the Body tab"""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(5, 5, 5, 5)
+        
+        # Body type selector
+        body_type_layout = QHBoxLayout()
+        body_type_layout.addWidget(QLabel("Body Type:"))
+        self.body_type_combo = QComboBox()
+        self.body_type_combo.addItems(["None", "JSON / Raw", "Form Data (multipart/form-data)", "Form URL Encoded (application/x-www-form-urlencoded)"])
+        self.body_type_combo.currentIndexChanged.connect(self.on_body_type_changed)
+        body_type_layout.addWidget(self.body_type_combo)
+        body_type_layout.addStretch()
+        layout.addLayout(body_type_layout)
+        
+        # Body input stack (switches between text and form data)
+        self.body_stack = QStackedWidget()
+        
+        # Raw/JSON body widget
+        raw_body_widget = QWidget()
+        raw_body_layout = QVBoxLayout(raw_body_widget)
+        raw_body_layout.setContentsMargins(0, 0, 0, 0)
+        self.body_input = QTextEdit()
+        self.body_input.setPlaceholderText('{"key": "value"} or raw text')
+        raw_body_layout.addWidget(self.body_input)
+        self.body_stack.addWidget(raw_body_widget)
+        
+        # Form data widget
+        form_data_widget = QWidget()
+        form_data_layout = QVBoxLayout(form_data_widget)
+        form_data_layout.setContentsMargins(0, 0, 0, 0)
+        
+        self.formdata_table = QTableWidget()
+        self.formdata_table.setColumnCount(4)
+        self.formdata_table.setHorizontalHeaderLabels(["Key", "Value", "Type", ""])
+        self.formdata_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
+        self.formdata_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.formdata_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
+        self.formdata_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
+        self.formdata_table.setColumnWidth(0, 150)
+        self.formdata_table.setColumnWidth(2, 100)
+        self.formdata_table.setColumnWidth(3, 30)
+        form_data_layout.addWidget(self.formdata_table)
+        
+        add_formdata_btn = QPushButton("+ Add Field")
+        add_formdata_btn.clicked.connect(self.add_formdata_row)
+        form_data_layout.addWidget(add_formdata_btn)
+        
+        self.body_stack.addWidget(form_data_widget)
+        
+        # Form URL Encoded widget
+        urlencoded_widget = QWidget()
+        urlencoded_layout = QVBoxLayout(urlencoded_widget)
+        urlencoded_layout.setContentsMargins(0, 0, 0, 0)
+        
+        self.urlencoded_table = QTableWidget()
+        self.urlencoded_table.setColumnCount(3)
+        self.urlencoded_table.setHorizontalHeaderLabels(["Key", "Value", ""])
+        self.urlencoded_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.urlencoded_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.urlencoded_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
+        self.urlencoded_table.setColumnWidth(2, 30)
+        urlencoded_layout.addWidget(self.urlencoded_table)
+        
+        add_urlencoded_btn = QPushButton("+ Add Field")
+        add_urlencoded_btn.clicked.connect(self.add_urlencoded_row)
+        urlencoded_layout.addWidget(add_urlencoded_btn)
+        
+        self.body_stack.addWidget(urlencoded_widget)
+        
+        # Add with stretch to maximize height
+        layout.addWidget(self.body_stack, stretch=1)
+        self.body_stack.setVisible(False)  # Initially hidden
+        
+        return widget
     
     def add_header_row(self, key: str = ""):
         """Add a new row to the headers table"""
@@ -240,6 +304,37 @@ class PerformanceTesterGUI(QMainWindow):
                     headers[key] = value
         return headers
     
+    def open_auth_dialog(self):
+        """Open the authentication configuration dialog"""
+        dialog = AuthDialog(self, self.auth_config)
+        if dialog.exec():
+            self.auth_config = dialog.get_config()
+            # Update button text to show auth is configured
+            auth_type = self.auth_config.get('type', 'None')
+            if auth_type == 'None':
+                self.auth_btn.setText("🔒 Authentication")
+                self.auth_btn.setStyleSheet("QPushButton { background-color: #3498db; color: white; font-weight: bold; }")
+            else:
+                self.auth_btn.setText(f"🔒 Auth: {auth_type}")
+                self.auth_btn.setStyleSheet("QPushButton { background-color: #27ae60; color: white; font-weight: bold; }")
+    
+    def apply_auth_to_headers(self, headers: Dict[str, str], url: str = "") -> Dict[str, str]:
+        """Apply authentication configuration to headers"""
+        if self.auth_config.get('type', 'None') == 'None':
+            return headers
+        
+        # Create a temporary auth dialog instance to use its apply method
+        temp_dialog = AuthDialog(self, self.auth_config)
+        return temp_dialog.apply_auth_to_headers(headers, url)
+    
+    def get_auth_query_params(self) -> Dict[str, str]:
+        """Get query parameters from auth (e.g., API Key in query)"""
+        if self.auth_config.get('type', 'None') == 'None':
+            return {}
+        
+        temp_dialog = AuthDialog(self, self.auth_config)
+        return temp_dialog.get_query_params()
+    
     def on_body_type_changed(self, index: int):
         """Handle body type selection change"""
         if index == 0:  # None
@@ -253,6 +348,12 @@ class PerformanceTesterGUI(QMainWindow):
             # Add initial row if empty
             if self.formdata_table.rowCount() == 0:
                 self.add_formdata_row()
+        elif index == 3:  # Form URL Encoded
+            self.body_stack.setVisible(True)
+            self.body_stack.setCurrentIndex(2)
+            # Add initial row if empty
+            if self.urlencoded_table.rowCount() == 0:
+                self.add_urlencoded_row()
     
     def add_formdata_row(self):
         """Add a new row to the form data table"""
@@ -351,16 +452,54 @@ class PerformanceTesterGUI(QMainWindow):
         
         return formdata if formdata else None
     
+    def add_urlencoded_row(self):
+        """Add a new row to the URL encoded table"""
+        row = self.urlencoded_table.rowCount()
+        self.urlencoded_table.insertRow(row)
+        
+        # Key input
+        key_item = QTableWidgetItem("")
+        self.urlencoded_table.setItem(row, 0, key_item)
+        
+        # Value input
+        value_item = QTableWidgetItem("")
+        self.urlencoded_table.setItem(row, 1, value_item)
+        
+        # Delete button
+        delete_btn = QPushButton("×")
+        delete_btn.setMaximumWidth(30)
+        delete_btn.clicked.connect(lambda: self.remove_urlencoded_row(row))
+        self.urlencoded_table.setCellWidget(row, 2, delete_btn)
+    
+    def remove_urlencoded_row(self, row: int):
+        """Remove a row from the URL encoded table"""
+        self.urlencoded_table.removeRow(row)
+    
+    def get_urlencoded_from_table(self) -> Optional[Dict[str, str]]:
+        """Extract URL encoded data from the table"""
+        urlencoded = {}
+        for row in range(self.urlencoded_table.rowCount()):
+            key_item = self.urlencoded_table.item(row, 0)
+            value_item = self.urlencoded_table.item(row, 1)
+            if key_item and value_item:
+                key = key_item.text().strip()
+                value = value_item.text().strip()
+                if key:
+                    urlencoded[key] = value
+        return urlencoded if urlencoded else None
+    
     def create_button_section(self) -> QHBoxLayout:
         """Create control buttons"""
         layout = QHBoxLayout()
         
         self.run_button = QPushButton("Run Test")
+        self.run_button.setMinimumWidth(100)
         self.run_button.clicked.connect(self.run_test)
         self.run_button.setStyleSheet("QPushButton { background-color: #27ae60; color: white; font-weight: bold; padding: 8px; }")
         layout.addWidget(self.run_button)
         
         self.stop_button = QPushButton("Stop")
+        self.stop_button.setMinimumWidth(100)
         self.stop_button.clicked.connect(self.stop_test)
         self.stop_button.setEnabled(False)
         self.stop_button.setStyleSheet("QPushButton { background-color: #e74c3c; color: white; font-weight: bold; padding: 8px; }")
@@ -431,9 +570,21 @@ class PerformanceTesterGUI(QMainWindow):
         # Get headers from table
         headers = self.get_headers_from_table()
         
+        # Apply authentication to headers
+        headers = self.apply_auth_to_headers(headers, url)
+        
+        # Get auth query parameters (e.g., for API Key in query)
+        auth_params = self.get_auth_query_params()
+        if auth_params:
+            # Append query parameters to URL
+            separator = '&' if '?' in url else '?'
+            query_string = '&'.join([f"{k}={v}" for k, v in auth_params.items()])
+            url = f"{url}{separator}{query_string}"
+        
         # Determine body type and prepare data
         body_bytes = None
         formdata = None
+        urlencoded = None
         body_type_index = self.body_type_combo.currentIndex()
         
         if body_type_index == 1:  # JSON/Raw
@@ -453,6 +604,12 @@ class PerformanceTesterGUI(QMainWindow):
                 QMessageBox.warning(self, "Input Error", "Please add at least one form data field")
                 return
         
+        elif body_type_index == 3:  # Form URL Encoded
+            urlencoded = self.get_urlencoded_from_table()
+            if not urlencoded:
+                QMessageBox.warning(self, "Input Error", "Please add at least one URL encoded field")
+                return
+        
         method = self.method_combo.currentText()
         total = self.num_requests.value()
         concurrency = min(self.concurrency.value(), total)
@@ -470,7 +627,7 @@ class PerformanceTesterGUI(QMainWindow):
         self.log_to_console("Console ready. Starting test...\n")
         
         # Start worker thread
-        self.worker = TestWorker(url, method, body_bytes, headers, total, concurrency, timeout, formdata)
+        self.worker = TestWorker(url, method, body_bytes, headers, total, concurrency, timeout, formdata, urlencoded)
         self.worker.finished.connect(self.on_test_finished)
         self.worker.error.connect(self.on_test_error)
         self.worker.log.connect(self.log_to_console)

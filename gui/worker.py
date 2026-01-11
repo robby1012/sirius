@@ -18,7 +18,8 @@ class TestWorker(QThread):
     log = pyqtSignal(str)
 
     def __init__(self, url: str, method: str, body: Optional[bytes], headers: Dict[str, str],
-                 total: int, concurrency: int, timeout: float, formdata: Optional[dict] = None):
+                 total: int, concurrency: int, timeout: float, formdata: Optional[dict] = None,
+                 urlencoded: Optional[Dict[str, str]] = None):
         super().__init__()
         self.url = url
         self.method = method
@@ -28,6 +29,7 @@ class TestWorker(QThread):
         self.concurrency = concurrency
         self.timeout = timeout
         self.formdata = formdata
+        self.urlencoded = urlencoded
 
     def run(self):
         """Run the performance test"""
@@ -60,6 +62,8 @@ class TestWorker(QThread):
                 self.log.emit(f"Headers: {json.dumps(self.headers, indent=2)}")
             if self.formdata:
                 self.log.emit(f"Form Data: {len(self.formdata)} fields")
+            if self.urlencoded:
+                self.log.emit(f"Form URL Encoded: {len(self.urlencoded)} fields")
             self.log.emit("SSL verification: disabled")
             self.log.emit("")
             
@@ -69,10 +73,12 @@ class TestWorker(QThread):
             
             try:
                 self.log.emit("Starting async test execution...")
-                result = loop.run_until_complete(
-                    self.run_test_with_formdata() if self.formdata else
-                    self.run_test_with_logging()
-                )
+                if self.formdata:
+                    result = loop.run_until_complete(self.run_test_with_formdata())
+                elif self.urlencoded:
+                    result = loop.run_until_complete(self.run_test_with_urlencoded())
+                else:
+                    result = loop.run_until_complete(self.run_test_with_logging())
                 self.log.emit(f"Test completed. Total time: {result['total_time']:.2f}s")
                 self.log.emit(f"Total requests: {len(result['results'])}")
                 successes = sum(1 for r in result['results'] if r.get('ok'))
@@ -217,6 +223,83 @@ class TestWorker(QThread):
                         elapsed = time.perf_counter() - req_start_perf
                         error_msg = str(e)
                         self.log.emit(f"Request {i} error (formdata): {self.method} {self.url}")
+                        self.log.emit(f"  Exception: {error_msg}")
+                        results.append({
+                            'index': i, 'status': None, 'time': None, 'ok': False, 
+                            'error': error_msg, 'start_epoch': req_start_epoch, 
+                            'start_rel_s': req_start_perf - start_all
+                        })
+
+            tasks = [asyncio.create_task(do_request(i)) for i in range(self.total)]
+            await asyncio.gather(*tasks)
+            total_time = time.perf_counter() - start_all
+
+        return {
+            'results': results,
+            'total_time': total_time,
+        }
+    
+    async def run_test_with_urlencoded(self) -> Dict[str, Any]:
+        """Run test with URL encoded form data"""
+        import time
+        from urllib.parse import urlencode
+        
+        self.log.emit("Using application/x-www-form-urlencoded encoding...")
+        
+        # Encode the form data
+        encoded_body = urlencode(self.urlencoded).encode('utf-8')
+        
+        # Set Content-Type header if not already set
+        headers = self.headers.copy()
+        if 'Content-Type' not in headers:
+            headers['Content-Type'] = 'application/x-www-form-urlencoded'
+        if 'Content-Length' not in headers:
+            headers['Content-Length'] = str(len(encoded_body))
+        
+        # Create SSL context that doesn't verify certificates
+        ssl_context = ssl.create_default_context()
+        ssl_context.check_hostname = False
+        ssl_context.verify_mode = ssl.CERT_NONE
+        
+        results: List[Dict[str, Any]] = []
+        sem = asyncio.Semaphore(self.concurrency)
+        timeout_cfg = aiohttp.ClientTimeout(total=self.timeout)
+        connector = aiohttp.TCPConnector(limit=0, ssl=ssl_context)
+
+        async with aiohttp.ClientSession(timeout=timeout_cfg, connector=connector) as session:
+            start_all = time.perf_counter()
+
+            async def do_request(i: int) -> None:
+                nonlocal results
+                async with sem:
+                    req_start_perf = time.perf_counter()
+                    req_start_epoch = time.time()
+                    try:
+                        async with session.request(self.method, self.url, data=encoded_body, headers=headers) as resp:
+                            payload = await resp.read()
+                            elapsed = time.perf_counter() - req_start_perf
+                            is_ok = 200 <= resp.status < 400
+                            results.append({
+                                'index': i,
+                                'status': resp.status,
+                                'time': elapsed,
+                                'ok': is_ok,
+                                'bytes': len(payload),
+                                'start_epoch': req_start_epoch,
+                                'start_rel_s': req_start_perf - start_all,
+                            })
+                            # Log error responses
+                            if not is_ok:
+                                try:
+                                    error_body = payload.decode('utf-8')[:200]  # First 200 chars
+                                    self.log.emit(f"Request {i} failed: {self.method} {self.url} -> HTTP {resp.status}")
+                                    self.log.emit(f"  Server response: {error_body}")
+                                except:
+                                    self.log.emit(f"Request {i} failed: {self.method} {self.url} -> HTTP {resp.status}")
+                    except Exception as e:
+                        elapsed = time.perf_counter() - req_start_perf
+                        error_msg = str(e)
+                        self.log.emit(f"Request {i} error (urlencoded): {self.method} {self.url}")
                         self.log.emit(f"  Exception: {error_msg}")
                         results.append({
                             'index': i, 'status': None, 'time': None, 'ok': False, 
