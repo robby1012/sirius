@@ -257,7 +257,7 @@ When using `--request-log`, each row represents a single request:
 
 ---
 
-License: MIT
+License: GPL v3
 
 ---
 
